@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>恐龍跳跳！</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #1a1a2e;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Courier New', monospace;
+      color: #eee;
+    }
+
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 12px;
+      letter-spacing: 4px;
+      color: #e94560;
+      text-shadow: 0 0 10px #e94560;
+    }
+
+    #scoreBoard {
+      display: flex;
+      gap: 40px;
+      margin-bottom: 16px;
+      font-size: 1rem;
+      letter-spacing: 2px;
+    }
+
+    #scoreBoard span { color: #a8edea; }
+    #scoreBoard strong { color: #fff; }
+
+    #gameContainer {
+      position: relative;
+      width: 800px;
+      height: 220px;
+      background: #16213e;
+      border: 2px solid #e94560;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 0 30px rgba(233,69,96,0.3);
+    }
+
+    canvas {
+      display: block;
+    }
+
+    #overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(22,33,62,0.85);
+      gap: 12px;
+    }
+
+    #overlay.hidden { display: none; }
+
+    #overlayTitle {
+      font-size: 1.6rem;
+      color: #e94560;
+      letter-spacing: 3px;
+    }
+
+    #overlayMsg {
+      font-size: 0.9rem;
+      color: #a8edea;
+      letter-spacing: 2px;
+    }
+
+    #startBtn {
+      margin-top: 8px;
+      padding: 10px 32px;
+      font-size: 1rem;
+      font-family: inherit;
+      letter-spacing: 2px;
+      background: #e94560;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+    }
+
+    #startBtn:hover { background: #c73652; transform: scale(1.05); }
+    #startBtn:active { transform: scale(0.97); }
+
+    #hint {
+      margin-top: 14px;
+      font-size: 0.75rem;
+      color: #555;
+      letter-spacing: 1px;
+    }
+  </style>
+</head>
+<body>
+  <h1>🦕 恐龍跳跳！</h1>
+
+  <div id="scoreBoard">
+    <div><span>分數：</span><strong id="scoreDisplay">0</strong></div>
+    <div><span>最高分：</span><strong id="bestDisplay">0</strong></div>
+    <div><span>關卡：</span><strong id="levelDisplay">1</strong></div>
+  </div>
+
+  <div id="gameContainer">
+    <canvas id="gameCanvas" width="800" height="220"></canvas>
+    <div id="overlay">
+      <div id="overlayTitle">🦕 恐龍跳跳</div>
+      <div id="overlayMsg">跳過仙人掌，活得越久分越高！</div>
+      <button id="startBtn">開始遊戲</button>
+    </div>
+  </div>
+
+  <div id="hint">空白鍵 / ↑ / 點擊 — 跳躍　　雙跳可用！</div>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+    const GROUND = H - 40;
+
+    const scoreDisplay = document.getElementById('scoreDisplay');
+    const bestDisplay  = document.getElementById('bestDisplay');
+    const levelDisplay = document.getElementById('levelDisplay');
+    const overlay      = document.getElementById('overlay');
+    const overlayTitle = document.getElementById('overlayTitle');
+    const overlayMsg   = document.getElementById('overlayMsg');
+    const startBtn     = document.getElementById('startBtn');
+
+    // ── palette ──────────────────────────────────────────────────────────────
+    const C = {
+      sky:    '#16213e',
+      ground: '#e94560',
+      dino:   '#a8edea',
+      cactus: '#56ab2f',
+      cactus2:'#a8e063',
+      star:   'rgba(168,237,234,0.6)',
+      cloud:  'rgba(255,255,255,0.08)',
+      score:  '#fff',
+    };
+
+    // ── state ─────────────────────────────────────────────────────────────────
+    let state = 'idle'; // idle | running | dead
+    let score, best = 0, frame, speed, spawnTimer, spawnInterval, level;
+    let dino, obstacles, stars, clouds, particles;
+
+    // ── init / reset ──────────────────────────────────────────────────────────
+    function init() {
+      score         = 0;
+      frame         = 0;
+      speed         = 5;
+      spawnTimer    = 0;
+      spawnInterval = 90;
+      level         = 1;
+
+      dino = {
+        x: 80, y: GROUND,
+        w: 44, h: 52,
+        vy: 0,
+        onGround: true,
+        jumpsLeft: 2,
+        legFrame: 0,
+      };
+
+      obstacles = [];
+      particles = [];
+
+      // background stars
+      stars = Array.from({ length: 60 }, () => ({
+        x: Math.random() * W,
+        y: Math.random() * (GROUND - 20),
+        r: Math.random() * 1.5 + 0.3,
+        twinkle: Math.random() * Math.PI * 2,
+      }));
+
+      // background clouds
+      clouds = Array.from({ length: 5 }, () => ({
+        x: Math.random() * W,
+        y: 20 + Math.random() * 60,
+        w: 60 + Math.random() * 80,
+        h: 20 + Math.random() * 20,
+      }));
+    }
+
+    // ── jump ──────────────────────────────────────────────────────────────────
+    function jump() {
+      if (state !== 'running') return;
+      if (dino.jumpsLeft > 0) {
+        dino.vy = -13;
+        dino.jumpsLeft--;
+        spawnParticles(dino.x + dino.w / 2, GROUND, 6, C.dino);
+      }
+    }
+
+    // ── input ─────────────────────────────────────────────────────────────────
+    document.addEventListener('keydown', e => {
+      if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jump(); }
+    });
+    canvas.addEventListener('pointerdown', () => jump());
+    startBtn.addEventListener('click', startGame);
+
+    function startGame() {
+      init();
+      state = 'running';
+      overlay.classList.add('hidden');
+      requestAnimationFrame(loop);
+    }
+
+    // ── particles ─────────────────────────────────────────────────────────────
+    function spawnParticles(x, y, n, color) {
+      for (let i = 0; i < n; i++) {
+        particles.push({
+          x, y,
+          vx: (Math.random() - 0.5) * 6,
+          vy: -Math.random() * 5 - 2,
+          life: 1,
+          color,
+          r: Math.random() * 4 + 2,
+        });
+      }
+    }
+
+    // ── obstacle factory ──────────────────────────────────────────────────────
+    function spawnObstacle() {
+      const type = Math.random() < 0.3 ? 'double' : 'single';
+      const baseW = 20 + Math.random() * 12 | 0;
+      const baseH = 36 + Math.random() * 28 | 0;
+      obstacles.push({ x: W + 10, w: baseW, h: baseH, type });
+    }
+
+    // ── draw helpers ──────────────────────────────────────────────────────────
+    function drawGround() {
+      ctx.fillStyle = C.ground;
+      ctx.fillRect(0, GROUND + dino.h, W, 3);
+
+      // dashes
+      ctx.fillStyle = 'rgba(233,69,96,0.3)';
+      const dashOffset = -(frame * speed % 40);
+      for (let x = dashOffset; x < W; x += 40) {
+        ctx.fillRect(x, GROUND + dino.h + 10, 24, 2);
+      }
+    }
+
+    function drawStars() {
+      stars.forEach(s => {
+        s.twinkle += 0.04;
+        const alpha = 0.3 + 0.4 * Math.abs(Math.sin(s.twinkle));
+        ctx.fillStyle = `rgba(168,237,234,${alpha})`;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    function drawClouds() {
+      clouds.forEach(c => {
+        c.x -= speed * 0.15;
+        if (c.x + c.w < 0) { c.x = W + 20; c.y = 20 + Math.random() * 60; }
+        ctx.fillStyle = C.cloud;
+        ctx.beginPath();
+        ctx.ellipse(c.x + c.w / 2, c.y + c.h / 2, c.w / 2, c.h / 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    function drawDino() {
+      const x = dino.x, y = dino.y, w = dino.w, h = dino.h;
+      ctx.fillStyle = C.dino;
+
+      // body
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h * 0.65, 8);
+      ctx.fill();
+
+      // head
+      ctx.beginPath();
+      ctx.roundRect(x + w * 0.45, y - h * 0.3, w * 0.65, h * 0.42, 6);
+      ctx.fill();
+
+      // eye
+      ctx.fillStyle = '#16213e';
+      ctx.beginPath();
+      ctx.arc(x + w * 0.88, y - h * 0.18, 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // pupil flash on double-jump
+      if (dino.jumpsLeft === 0) {
+        ctx.fillStyle = '#e94560';
+        ctx.beginPath();
+        ctx.arc(x + w * 0.88, y - h * 0.18, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // tail
+      ctx.fillStyle = C.dino;
+      ctx.beginPath();
+      ctx.moveTo(x, y + h * 0.2);
+      ctx.lineTo(x - w * 0.4, y + h * 0.05);
+      ctx.lineTo(x - w * 0.1, y + h * 0.45);
+      ctx.closePath();
+      ctx.fill();
+
+      // legs (animate only on ground)
+      if (dino.onGround) dino.legFrame += 0.25;
+      const lA = Math.sin(dino.legFrame) * 8;
+      const lB = Math.cos(dino.legFrame) * 8;
+
+      ctx.fillStyle = C.dino;
+      // back leg
+      ctx.beginPath();
+      ctx.roundRect(x + w * 0.1, y + h * 0.6, 12, 22 + lA, 4);
+      ctx.fill();
+      // front leg
+      ctx.beginPath();
+      ctx.roundRect(x + w * 0.55, y + h * 0.6, 12, 22 + lB, 4);
+      ctx.fill();
+
+      // small arm
+      ctx.beginPath();
+      ctx.roundRect(x + w * 0.7, y + h * 0.1, 8, 14, 3);
+      ctx.fill();
+    }
+
+    function drawCactus(ob) {
+      const x = ob.x, w = ob.w, h = ob.h;
+      const y = GROUND + dino.h - h;
+
+      // gradient green
+      const grad = ctx.createLinearGradient(x, y, x + w, y + h);
+      grad.addColorStop(0, C.cactus2);
+      grad.addColorStop(1, C.cactus);
+      ctx.fillStyle = grad;
+
+      // stem
+      ctx.beginPath();
+      ctx.roundRect(x + w * 0.3, y, w * 0.4, h, 4);
+      ctx.fill();
+
+      if (ob.type === 'single') {
+        // one side arm
+        ctx.beginPath();
+        ctx.roundRect(x, y + h * 0.35, w * 0.35, h * 0.2, 3);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.roundRect(x, y + h * 0.2, w * 0.18, h * 0.18, 3);
+        ctx.fill();
+      } else {
+        // two side arms
+        ctx.beginPath();
+        ctx.roundRect(x, y + h * 0.3, w * 0.35, h * 0.18, 3);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.roundRect(x + w * 0.65, y + h * 0.3, w * 0.35, h * 0.18, 3);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.roundRect(x, y + h * 0.15, w * 0.18, h * 0.18, 3);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.roundRect(x + w * 0.82, y + h * 0.15, w * 0.18, h * 0.18, 3);
+        ctx.fill();
+      }
+
+      // spikes
+      ctx.fillStyle = '#c8ff6e';
+      for (let i = 0; i < 3; i++) {
+        const sy = y + h * 0.05 + i * h * 0.12;
+        ctx.beginPath();
+        ctx.moveTo(x + w * 0.5, sy - 4);
+        ctx.lineTo(x + w * 0.38, sy + 4);
+        ctx.lineTo(x + w * 0.62, sy + 4);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
+    function drawParticles() {
+      particles = particles.filter(p => p.life > 0);
+      particles.forEach(p => {
+        p.x  += p.vx;
+        p.y  += p.vy;
+        p.vy += 0.3;
+        p.life -= 0.05;
+        ctx.globalAlpha = p.life;
+        ctx.fillStyle   = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      });
+    }
+
+    // ── collision ─────────────────────────────────────────────────────────────
+    function checkCollision(ob) {
+      const dy = dino.y, dx = dino.x;
+      const oy = GROUND + dino.h - ob.h;
+      const margin = 6;
+      return (
+        dx + dino.w - margin > ob.x + ob.w * 0.25 &&
+        dx + margin < ob.x + ob.w * 0.75 &&
+        dy + dino.h > oy + margin
+      );
+    }
+
+    // ── main loop ─────────────────────────────────────────────────────────────
+    function loop() {
+      if (state !== 'running') return;
+      frame++;
+      update();
+      render();
+      requestAnimationFrame(loop);
+    }
+
+    function update() {
+      // score & level
+      score++;
+      level = 1 + Math.floor(score / 300);
+      speed = 5 + level * 0.8;
+      spawnInterval = Math.max(45, 90 - level * 5);
+
+      // dino physics
+      dino.vy += 0.7;
+      dino.y  += dino.vy;
+      if (dino.y >= GROUND) {
+        dino.y        = GROUND;
+        dino.vy       = 0;
+        dino.onGround = true;
+        dino.jumpsLeft = 2;
+      } else {
+        dino.onGround = false;
+      }
+
+      // spawn
+      spawnTimer++;
+      if (spawnTimer >= spawnInterval) {
+        spawnObstacle();
+        spawnTimer = 0;
+        spawnInterval = Math.max(45, (60 + Math.random() * 40) - level * 3) | 0;
+      }
+
+      // move & remove obstacles
+      obstacles = obstacles.filter(ob => ob.x + ob.w > -10);
+      obstacles.forEach(ob => {
+        ob.x -= speed;
+        if (checkCollision(ob)) {
+          state = 'dead';
+          if (score > best) best = score;
+          spawnParticles(dino.x + dino.w / 2, dino.y + dino.h / 2, 20, C.dino);
+          showGameOver();
+        }
+      });
+
+      // move stars slowly
+      stars.forEach(s => {
+        s.x -= speed * 0.05;
+        if (s.x < 0) s.x = W;
+      });
+
+      // update HUD
+      scoreDisplay.textContent = score;
+      bestDisplay.textContent  = best;
+      levelDisplay.textContent = level;
+    }
+
+    function render() {
+      ctx.fillStyle = C.sky;
+      ctx.fillRect(0, 0, W, H);
+
+      drawStars();
+      drawClouds();
+      drawGround();
+      obstacles.forEach(drawCactus);
+      drawDino();
+      drawParticles();
+    }
+
+    function showGameOver() {
+      overlayTitle.textContent = '💥 遊戲結束！';
+      overlayMsg.textContent   = `得分：${score}　最高分：${best}`;
+      startBtn.textContent     = '再玩一次';
+      overlay.classList.remove('hidden');
+    }
+
+    // ── initial render ────────────────────────────────────────────────────────
+    init();
+    render();
+  </script>
+</body>
+</html>
